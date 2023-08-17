@@ -1,10 +1,22 @@
 #include <CAN.h>
 
+CANhandler *CANhandler::instance = nullptr;
+
+CANhandler::CANhandler()
+{
+    instance = this; // Store the instance pointer
+
+    parameters[0] = {"CAN_NODE", UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE, MY_NODE_ID, 0, 127};
+    parameters[1] = {"MyPID_P", UAVCAN_PROTOCOL_PARAM_VALUE_REAL_VALUE, 1.2, 0.1, 5.0};
+    parameters[2] = {"MyPID_I", UAVCAN_PROTOCOL_PARAM_VALUE_REAL_VALUE, 1.35, 0.1, 5.0};
+    parameters[3] = {"MyPID_D", UAVCAN_PROTOCOL_PARAM_VALUE_REAL_VALUE, 0.025, 0.001, 1.0};
+}
+
 /*
   get a 64 bit monotonic timestamp in microseconds since start. This
   is platform specific
  */
-uint64_t micros64(void)
+uint64_t CANhandler::micros64()
 {
     return (uint64_t)micros();
 }
@@ -12,7 +24,7 @@ uint64_t micros64(void)
 /*
   get monotonic time in milliseconds since startup
  */
-static uint32_t millis32(void)
+uint32_t CANhandler::millis32()
 {
     return millis();
 }
@@ -20,7 +32,7 @@ static uint32_t millis32(void)
 /*
   get a 16 byte unique ID for this node, this should be based on the CPU unique ID or other unique ID
  */
-void getUniqueID(uint8_t id[16])
+void CANhandler::getUniqueID(uint8_t id[16])
 {
     memset(id, 0, 16);
     memcpy(id, UniqueID8, 8);
@@ -30,7 +42,7 @@ void getUniqueID(uint8_t id[16])
 /*
   handle a GetNodeInfo request
 */
-static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     Serial.print("GetNodeInfo request from ");
     Serial.println(transfer->source_node_id);
@@ -40,7 +52,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 
     memset(&pkt, 0, sizeof(pkt));
 
-    node_status.uptime_sec = micros64() / 1000000ULL;
+    node_status.uptime_sec = millis32() / 1000UL;
     pkt.status = node_status;
 
     // fill in your major and minor firmware version
@@ -74,7 +86,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 /*
   handle a servo ArrayCommand request
 */
-static void handle_ArrayCommand(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::handle_ArrayCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     struct uavcan_equipment_actuator_ArrayCommand cmd;
     if (uavcan_equipment_actuator_ArrayCommand_decode(transfer, &cmd))
@@ -112,7 +124,7 @@ static void handle_ArrayCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 /*
   handle parameter GetSet request
  */
-static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     struct uavcan_protocol_param_GetSetRequest req;
     if (uavcan_protocol_param_GetSetRequest_decode(transfer, &req))
@@ -198,7 +210,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 /*
   handle parameter executeopcode request
  */
-static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     struct uavcan_protocol_param_ExecuteOpcodeRequest req;
     if (uavcan_protocol_param_ExecuteOpcodeRequest_decode(transfer, &req))
@@ -236,7 +248,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 /*
   handle a DNA allocation packet
  */
-static void handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID)
     {
@@ -296,10 +308,10 @@ static void handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfe
 /*
   ask for a dynamic node allocation
  */
-static void request_DNA()
+void CANhandler::request_DNA()
 {
     const uint32_t now = millis32();
-    static uint8_t node_id_allocation_transfer_id = 0;
+    uint8_t node_id_allocation_transfer_id = 0;
 
     DNA.send_next_node_id_allocation_request_at_ms =
         now + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
@@ -318,7 +330,7 @@ static void request_DNA()
     uint8_t my_unique_id[16];
     getUniqueID(my_unique_id);
 
-    static const uint8_t MaxLenOfUniqueIDInRequest = 6;
+    const uint8_t MaxLenOfUniqueIDInRequest = 6;
     uint8_t uid_size = (uint8_t)(16 - DNA.node_id_allocation_unique_id_offset);
 
     if (uid_size > MaxLenOfUniqueIDInRequest)
@@ -349,7 +361,7 @@ static void request_DNA()
 /*
  This callback is invoked by the library when a new message or request or response is received.
 */
-static void onTransferReceived(CanardInstance *ins, CanardRxTransfer *transfer)
+void CANhandler::onTransferReceived(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     // switch on data type ID to pass to the right handler function
     if (transfer->transfer_type == CanardTransferTypeRequest)
@@ -402,11 +414,11 @@ static void onTransferReceived(CanardInstance *ins, CanardRxTransfer *transfer)
 
  This function must fill in the out_data_type_signature to be the signature of the message.
  */
-static bool shouldAcceptTransfer(const CanardInstance *ins,
-                                 uint64_t *out_data_type_signature,
-                                 uint16_t data_type_id,
-                                 CanardTransferType transfer_type,
-                                 uint8_t source_node_id)
+bool CANhandler::shouldAcceptTransfer(const CanardInstance *ins,
+                                      uint64_t *out_data_type_signature,
+                                      uint16_t data_type_id,
+                                      CanardTransferType transfer_type,
+                                      uint8_t source_node_id)
 {
     if (transfer_type == CanardTransferTypeRequest)
     {
@@ -455,7 +467,7 @@ static bool shouldAcceptTransfer(const CanardInstance *ins,
   send the 1Hz NodeStatus message. This is what allows a node to show
   up in the DroneCAN GUI tool and in the flight controller logs
  */
-static void send_NodeStatus(void)
+void CANhandler::send_NodeStatus(void)
 {
     uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
 
@@ -485,9 +497,9 @@ static void send_NodeStatus(void)
 /*
   This function is called at 1 Hz rate from the main loop.
 */
-static void process1HzTasks(uint64_t timestamp_usec)
+void CANhandler::process1HzTasks(uint64_t timestamp_usec)
 {
-    //Serial.println("1Hz task started");
+    // Serial.println("1Hz task started");
     /*
       Purge transfers that are no longer transmitted. This can free up some memory
     */
@@ -502,7 +514,7 @@ static void process1HzTasks(uint64_t timestamp_usec)
 /*
   send servo status at 25Hz
 */
-static void send_ServoStatus(void)
+void CANhandler::send_ServoStatus(void)
 {
     // send a separate status packet for each servo
     for (uint8_t i = 0; i < NUM_SERVOS; i++)
@@ -544,7 +556,7 @@ STM32_CAN Can(CAN1, DEF); // Use PA11/12 pins for CAN1.
 uint32_t next_1hz_service_at = 0;
 uint32_t next_25hz_service_at = 0;
 
-void initCAN()
+void CANhandler::initCAN()
 {
     /*
       Initializing the STM32_CAN Interface
@@ -558,8 +570,8 @@ void initCAN()
     canardInit(&canard,
                memory_pool,
                sizeof(memory_pool),
-               onTransferReceived,
-               shouldAcceptTransfer,
+               onTransferReceivedStatic,
+               shouldAcceptTransferStatic,
                NULL);
 
     if (MY_NODE_ID > 0)
@@ -577,12 +589,12 @@ void initCAN()
 /*
   Transmits all frames from the TX queue, receives up to one frame.
 */
-static void processTxRxOnce()
+void CANhandler::processTxRxOnce()
 {
     // Transmitting
     for (const CanardCANFrame *txf = NULL; (txf = canardPeekTxQueue(&canard)) != NULL;)
     {
-        static CAN_message_t CAN_TX_msg;
+        static CAN_message_t CAN_TX_msg; // needs to be static
 
         CAN_TX_msg.flags.extended = true;
         CAN_TX_msg.id = txf->id;
@@ -597,7 +609,7 @@ static void processTxRxOnce()
     const uint32_t start_ms = millis32();
 
     CanardCANFrame rx_frame;         // new canard frame for RX
-    static CAN_message_t CAN_RX_msg; // new STM32_CAN frame for receiving
+    static CAN_message_t CAN_RX_msg; // new STM32_CAN frame for receiving, needs to be static
 
     bool rx_res = Can.read(CAN_RX_msg); // read from can interface
     if (rx_res > 0)
@@ -669,7 +681,7 @@ static void processTxRxOnce()
     }
 }
 
-void runCAN()
+void CANhandler::runCAN()
 {
     processTxRxOnce();
 
@@ -692,12 +704,12 @@ void runCAN()
     else
     {
 
-        if (ts/1000 >= next_1hz_service_at)
+        if (ts / 1000 >= next_1hz_service_at)
         {
             next_1hz_service_at += 1000;
             process1HzTasks(ts);
         }
-        if (ts/1000 >= next_25hz_service_at)
+        if (ts / 1000 >= next_25hz_service_at)
         {
             next_25hz_service_at += 1000 / 25;
             send_ServoStatus();
